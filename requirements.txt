@@ -1,0 +1,39 @@
+# Conformal Prediction for Time-series with Change points (CPTC)
+# Requirements file for reproducing the experiments from:
+# "Conformal Prediction for Time-series Forecasting with Change Points"
+# NeurIPS 2025
+
+# Core dependencies
+numpy==1.24.4
+scipy==1.10.1
+pandas==1.4.2
+scikit-learn==0.23.2
+
+# Deep learning frameworks
+torch==1.9.0
+tensorflow==2.7.4
+keras==2.7.0
+
+# Time series forecasting
+gluonts==0.6.7
+statsmodels==0.14.1
+
+# Visualization
+matplotlib==3.6.3
+seaborn==0.13.2
+
+# Utilities
+tqdm==4.46.0
+pyyaml==5.3.1
+joblib==1.4.2
+
+# Jupyter notebook support (optional, for visualization)
+ipython==8.12.3
+ipykernel==6.29.5
+ipywidgets==8.1.7
+jupyter-client==8.6.3
+jupyter-core==5.7.2
+
+# Additional dependencies
+python-dateutil==2.9.0.post0
+pytz==2025.2
