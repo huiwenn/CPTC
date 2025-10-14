@@ -47,34 +47,6 @@ pip install -r requirements.txt
 
 ---
 
-## Repository Structure
-
-```
-CPTC/
-├── algos/                      # Algorithm implementations
-│   ├── cptc.py                # CPTC (main method)
-│   ├── aci.py                 # Adaptive Conformal Inference
-│   ├── agaci.py               # Aggregated ACI
-│   ├── dtaci.py               # Distribution-free Time-series ACI
-│   ├── mvp.py                 # Multi-Valid Prediction
-│   ├── aci_decay.py           # ACI with decaying learning rate
-│   ├── slds_new.py            # Switching Linear Dynamical Systems
-│   └── SPCI_class.py          # Split Conformal Prediction Intervals
-├── data/                       # Datasets
-│   └── inference_per_z/       # Pre-processed datasets with state information
-│       ├── bouncing_ball_obs.npz
-│       ├── bouncing_ball_dyn.npz
-│       ├── 3_mode_system.npz
-│       ├── bee.npz
-│       ├── electricity.npz
-│       └── traffic.npz
-├── run_all_baselines.py       # Main script to run experiments
-├── requirements.txt           # Python dependencies
-├── demo.ipynb                 # Example use. Generate figure 1 in paper.
-└── README.md                  # This file
-```
-
----
 
 ## Quick Start
 
@@ -111,7 +83,7 @@ This creates a CSV file with coverage and width statistics for all methods acros
 - **MVP**: Multi-Valid Prediction
 - **CPTC**: Our proposed method (Conformal Prediction for Time-series with Change points)
 
-Other baselines reported in the paper such as HopCPT and ECI were ran directly using the method's open sourced codebase.
+Other baselines reported in the paper such as HopCPT and ECI were ran directly using the method's open sourced codebase. SPCI is included in this repository, but requires a different environment setup to run. Please see their original repository for instructions.
 
 
 ---
@@ -214,4 +186,3 @@ This work was supported in part by the U.S. Army Research Office under Army-ECAS
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
----
