@@ -808,7 +808,7 @@ def load_and_generate_table(results_dir="results/new", output_csv="results_table
 
         # Compute metrics based on method type
         try:
-            if method in ['CP']
+            if method in ['CP']:
             
                 # These have all_coverages and all_widths
                 all_coverages = data['all_coverages']
