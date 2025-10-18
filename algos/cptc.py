@@ -6,7 +6,7 @@ from tqdm import tqdm
 import math
 
 
-def conformal_prediction_cptc(gt, preds, z_prob, z_mean, T=100, alpha=0.1, gamma=0.02, max_width=3, min_residuals=25):
+def conformal_prediction_cptc(gt, preds, z_prob, z_mean, T=100, alpha=0.1, gamma=0.2, max_width=3,  min_residuals=25):
     """
     Conformal Prediction for Time series with Change Points (CPTC)
     
@@ -36,9 +36,6 @@ def conformal_prediction_cptc(gt, preds, z_prob, z_mean, T=100, alpha=0.1, gamma
         for z, p_z_t in enumerate(z_prob[t]):
             if p_z_t > 0.3:
                 S_z[z].append( A(gt[t], preds[t]) )
-
-    # for z in states:
-    #     print(z, len(S_z[z]))
 
     # Add all residuals to "all" key, fallback for when state calibaration data is too little
     S_z["all"] = [A(gt[t], preds[t]) for t in range(T)] + [max_width]
@@ -130,5 +127,4 @@ def conformal_prediction_cptc(gt, preds, z_prob, z_mean, T=100, alpha=0.1, gamma
         # Step 12: Update nonconformity scores with residuals
         S_z[z_hat_t].append(A(preds[t], y_t))
 
-    return all_coverages, all_widths
-
+    return all_coverages, all_widths, prediction_intervals

@@ -17,6 +17,10 @@ from algos.cptc import conformal_prediction_cptc
 from algos.agaci import agaci
 from algos.dtaci import dtaci
 from algos.mvp import mvp
+from algos.pid_eci import ECI, OGD, decay_OGD
+#import algos.SPCI_class as SPCI
+from sklearn.ensemble import RandomForestRegressor
+import torch
 
 
 class DataLoader:
@@ -37,48 +41,10 @@ class DataLoader:
 
         data = np.load(filepath)
 
-        # Determine format based on available keys
-        if 'all_mean' in data.keys():
-            # GluonTS format
-            return self._load_gluonts_format(data, dataset_name)
-        else:
-            # Custom format
-            return self._load_custom_format(data, dataset_name)
-
-    def _load_custom_format(self, data, dataset_name):
-        """Load custom dataset format (bouncing ball, 3-mode system)"""
-        ground_truth = data['ground_truth']  # (n_series, total_length) or (n_series, total_length, n_dims)
-        predictions = data['mean']           # (n_series, pred_length) or (n_series, pred_length, n_dims)
-        z_probs = data['all_z_probs']       # (n_series, z_prob_length, n_states)
-        lower_bound = data['lb']            # (n_series, pred_length) or (n_series, pred_length, n_dims)
-        upper_bound = data['ub']            # (n_series, pred_length) or (n_series, pred_length, n_dims)
-        z_mean = data['z_mean']            # (n_series, pred_length, n_states, n_dims)
-
-        # Only squeeze if last dimension is 1 (univariate stored as 3D)
-        if len(ground_truth.shape) == 3 and ground_truth.shape[-1] == 1:
-            ground_truth = ground_truth.squeeze(-1)
-        if len(predictions.shape) == 3 and predictions.shape[-1] == 1:
-            predictions = predictions.squeeze(-1)
-        if len(lower_bound.shape) == 3 and lower_bound.shape[-1] == 1:
-            lower_bound = lower_bound.squeeze(-1)
-        if len(upper_bound.shape) == 3 and upper_bound.shape[-1] == 1:
-            upper_bound = upper_bound.squeeze(-1)
-        if len(z_mean.shape) == 3 and z_mean.shape[-1] == 1:
-            z_mean = z_mean.squeeze(-1)
+        return self._load_data_standard_format(data, dataset_name)
 
 
-        return {
-            'ground_truth': ground_truth,
-            'predictions': predictions,
-            'z_probs': z_probs,
-            'z_mean': z_mean,
-            'lower_bound': lower_bound,
-            'upper_bound': upper_bound,
-            'dataset_name': dataset_name,
-            'format_type': 'custom'
-        }
-
-    def _load_gluonts_format(self, data, dataset_name):
+    def _load_data_standard_format(self, data, dataset_name):
         """Load GluonTS dataset format (electricity, traffic)"""
         ground_truth = data['ground_truth']  # (n_series, pred_length) or (n_series, pred_length, n_dims)
         predictions = data['all_mean']       # (n_series, pred_length) or (n_series, pred_length, n_dims)
@@ -98,7 +64,6 @@ class DataLoader:
             upper_bound = upper_bound.squeeze(-1)
         if len(z_mean.shape) == 3 and z_mean.shape[-1] == 1:
             z_mean = z_mean.squeeze(-1)
-        
 
         return {
             'ground_truth': ground_truth,
@@ -127,17 +92,17 @@ class BaselineRunner:
         
         os.makedirs(results_dir, exist_ok=True)
 
-        self.max_widths = {"bee": 0.2,
-        "bouncing_ball_obs": 10,
-        "bouncing_ball_dyn": 8,
-        "3_mode_system": 8,
+        self.max_widths = {"bee": 0.5,
+        "bouncing_ball_obs": 5,
+        "bouncing_ball_dyn": 3,
+        "3_mode_system": 3,
         "traffic": 0.2,
         "electricity": 60
         }
 
         self.cptc_gammas = {"bee": 3,
-        "bouncing_ball_obs": 0.3,
-        "bouncing_ball_dyn": 0.3,
+        "bouncing_ball_obs": 1,
+        "bouncing_ball_dyn": 0.2,
         "3_mode_system": 0.2,
         "traffic": 1,
         "electricity": 1
@@ -218,9 +183,9 @@ class BaselineRunner:
 
         return self._compute_metrics(all_coverages, all_widths, dataset_dict['dataset_name'])
 
-    def run_redsds(self, dataset_dict):
-        """Run RED-SDS baseline using model's prediction intervals (90% density)"""
-        print(f"\nRunning RED-SDS on {dataset_dict['dataset_name']}...")
+    def run_REDSDS(self, dataset_dict):
+        """Run REDSDS baseline using model's prediction intervals (90% density)"""
+        print(f"\nRunning REDSDS on {dataset_dict['dataset_name']}...")
 
         ground_truth = dataset_dict['ground_truth']
         predictions = dataset_dict['predictions']
@@ -234,7 +199,7 @@ class BaselineRunner:
         # Check if multivariate
         is_multivariate = len(ground_truth.shape) == 3 and ground_truth.shape[-1] > 1
 
-        for ts in tqdm(range(ground_truth.shape[0]), desc="RED-SDS"):
+        for ts in tqdm(range(ground_truth.shape[0]), desc="REDSDS"):
             gt = ground_truth[ts, -pred_len:]
             lb = lower_bound[ts]
             ub = upper_bound[ts]
@@ -263,7 +228,7 @@ class BaselineRunner:
             all_widths.append(width)
 
         # Save results
-        save_path = os.path.join(self.results_dir, f"{dataset_dict['dataset_name']}_redsds.npz")
+        save_path = os.path.join(self.results_dir, f"{dataset_dict['dataset_name']}_REDSDS.npz")
         np.savez(save_path, all_coverages=all_coverages, all_widths=all_widths)
 
         return self._compute_metrics(all_coverages, all_widths, dataset_dict['dataset_name'])
@@ -365,12 +330,12 @@ class BaselineRunner:
                     effective_warm_start = min(warm_start, z_prob.shape[0] // 2)
                     scores_subset = scores[:z_prob.shape[0]]
                     # Pass scores as gt, zeros as pred (CPTC will compute residuals)
-                    coverages, widths = conformal_prediction_cptc(
+                    coverages, widths, _ = conformal_prediction_cptc(
                           gt[:z_prob.shape[0]], pred[:z_prob.shape[0]], z_prob, z_mean,
                         T=effective_warm_start, alpha=self.alpha, gamma=gamma, max_width=max_width
                     )
                 else:
-                    coverages, widths = conformal_prediction_cptc(
+                    coverages, widths, _ = conformal_prediction_cptc(
                         gt[:z_prob.shape[0]], pred[:z_prob.shape[0]], z_prob, z_mean,
                         T=warm_start, alpha=self.alpha, gamma=gamma, max_width=max_width
                     )
@@ -378,12 +343,12 @@ class BaselineRunner:
                 # Univariate: original logic
                 if z_prob.shape[0] < pred_len:
                     effective_warm_start = min(warm_start, z_prob.shape[0] // 2)
-                    coverages, widths = conformal_prediction_cptc(
+                    coverages, widths, _ = conformal_prediction_cptc(
                         gt[:z_prob.shape[0]], pred[:z_prob.shape[0]], z_prob, z_mean,
                         T=effective_warm_start, alpha=self.alpha, gamma=gamma, max_width=max_width
                     )
                 else:
-                    coverages, widths = conformal_prediction_cptc(
+                    coverages, widths, _ = conformal_prediction_cptc(
                         gt, pred, z_prob, z_mean,
                         T=warm_start, alpha=self.alpha, gamma=gamma, max_width=max_width
                     )
@@ -529,82 +494,207 @@ class BaselineRunner:
             width_std = width_std * 100
 
         return coverage, cov_std, width, width_std
-    def run_enbpi(self, dataset_dict, past_window=30):
-        """Run Ensemble Bootstrap Prediction Intervals (EnbPI)"""
-        print(f"\nRunning EnbPI on {dataset_dict['dataset_name']}...")
+
+    def run_eci(self, dataset_dict):
+        """Run Error Correction with Integrator (ECI)"""
+        print(f"\nRunning ECI on {dataset_dict['dataset_name']}...")
 
         ground_truth = dataset_dict['ground_truth']
         predictions = dataset_dict['predictions']
         pred_len = predictions.shape[1]
         warm_start = self.compute_warm_start(pred_len)
 
-        # Check if multivariate - EnbPI works best with univariate
-        is_multivariate = len(ground_truth.shape) == 3 and ground_truth.shape[-1] > 1
-        if is_multivariate:
-            print("  Warning: EnbPI designed for univariate data, using first dimension")
-            ground_truth = ground_truth[:, :, 0]
-            predictions = predictions[:, :, 0]
+        # Compute conformity scores
+        scores = self.compute_conformity_scores(
+            ground_truth[:, -pred_len:],
+            predictions,
+            dataset_dict['dataset_name']
+        )
 
+        all_qs = []
         all_coverages = []
-        all_widths = []
 
-        for sample_i in tqdm(range(ground_truth.shape[0]), desc="EnbPI"):
-            # Create sliding window features (window size = 2)
-            window = 2
-            gt_full = ground_truth[sample_i]
-            pred_full = predictions[sample_i]
-
-            # Create features: X[t] = [pred[t], pred[t+1]], Y[t] = gt[t+2]
-            X_full = torch.tensor([pred_full[a:a+window] for a in range(pred_len-window)])
-            Y_full = torch.tensor(gt_full[-pred_len+window:], dtype=torch.float32)
-
-            # Split into train and predict
-            N = warm_start
-            X_train = X_full[:N]
-            X_predict = X_full[N:]
-            Y_train = Y_full[:N]
-            Y_predict = Y_full[N:]
-
-            # Build EnbPI model
-            fit_func = RandomForestRegressor(
-                n_estimators=10, max_depth=1, criterion='squared_error',
-                bootstrap=False, n_jobs=-1, random_state=1103
-            )
-
-            enbpi_model = SPCI.SPCI_and_EnbPI(X_train, X_predict, Y_train, Y_predict, fit_func=fit_func)
-
-            # Fit bootstrap models
-            enbpi_model.fit_bootstrap_models_online_multistep(B=25, fit_sigmaX=False, stride=1)
-
-            # Compute prediction intervals (use_SPCI=False for EnbPI)
-            enbpi_model.compute_PIs_Ensemble_online(
-                self.alpha, smallT=True, past_window=past_window,
-                use_SPCI=False, quantile_regr=False, stride=1
-            )
-
-            # Get results
-            results = enbpi_model.get_results(self.alpha, 'data', 1)
-            coverage = results['coverage'].item()
-            width = results['width'].item()
-
+        for i in tqdm(range(scores.shape[0]), desc="ECI"):
+            result = ECI(scores[i], alpha=self.alpha, lr=0.01, T_burnin=warm_start, ahead=1)
+            qs = result['q']
+            coverage = (scores[i] <= qs).astype(int)
+            all_qs.append(qs)
             all_coverages.append(coverage)
-            all_widths.append(width)
 
         # Save results
-        save_path = os.path.join(self.results_dir, f"{dataset_dict['dataset_name']}_enbpi.npz")
-        np.savez(save_path, all_coverages=all_coverages, all_widths=all_widths)
+        save_path = os.path.join(self.results_dir, f"{dataset_dict['dataset_name']}_eci.npz")
+        np.savez(save_path, qs=all_qs, coverages=all_coverages)
 
         # Compute metrics
         coverage_pct = np.mean(all_coverages) * 100
-        cov_std = np.std(all_coverages) * 100
-        width_mean = np.mean(all_widths)
-        width_std = np.std(all_widths)
+        cov_std = np.std(np.mean(all_coverages, axis=1)) * 100
+        width = np.mean(all_qs) * 2
+        width_std = np.std(np.mean(all_qs, axis=1)) * 2
 
         if 'traffic' in dataset_dict['dataset_name']:
-            width_mean = width_mean * 100
+            width = width * 100
             width_std = width_std * 100
 
-        return coverage_pct, cov_std, width_mean, width_std
+        return coverage_pct, cov_std, width, width_std
+
+    def run_ogd(self, dataset_dict):
+        """Run Online Gradient Descent (OGD)"""
+        print(f"\nRunning OGD on {dataset_dict['dataset_name']}...")
+
+        ground_truth = dataset_dict['ground_truth']
+        predictions = dataset_dict['predictions']
+        pred_len = predictions.shape[1]
+
+        # Compute conformity scores
+        scores = self.compute_conformity_scores(
+            ground_truth[:, -pred_len:],
+            predictions,
+            dataset_dict['dataset_name']
+        )
+
+        all_qs = []
+        all_coverages = []
+
+        for i in tqdm(range(scores.shape[0]), desc="OGD"):
+            result = OGD(scores[i], alpha=self.alpha, lr=0.01, ahead=1)
+            qs = result['q']
+            coverage = (scores[i] <= qs).astype(int)
+            all_qs.append(qs)
+            all_coverages.append(coverage)
+
+        # Save results
+        save_path = os.path.join(self.results_dir, f"{dataset_dict['dataset_name']}_ogd.npz")
+        np.savez(save_path, qs=all_qs, coverages=all_coverages)
+
+        # Compute metrics
+        coverage_pct = np.mean(all_coverages) * 100
+        cov_std = np.std(np.mean(all_coverages, axis=1)) * 100
+        width = np.mean(all_qs) * 2
+        width_std = np.std(np.mean(all_qs, axis=1)) * 2
+
+        if 'traffic' in dataset_dict['dataset_name']:
+            width = width * 100
+            width_std = width_std * 100
+
+        return coverage_pct, cov_std, width, width_std
+
+    def run_decay_ogd(self, dataset_dict):
+        """Run Decaying Online Gradient Descent (decay_OGD)"""
+        print(f"\nRunning decay_OGD on {dataset_dict['dataset_name']}...")
+
+        ground_truth = dataset_dict['ground_truth']
+        predictions = dataset_dict['predictions']
+        pred_len = predictions.shape[1]
+
+        # Compute conformity scores
+        scores = self.compute_conformity_scores(
+            ground_truth[:, -pred_len:],
+            predictions,
+            dataset_dict['dataset_name']
+        )
+
+        all_qs = []
+        all_coverages = []
+
+        for i in tqdm(range(scores.shape[0]), desc="decay_OGD"):
+            result = decay_OGD(scores[i], alpha=self.alpha, lr=0.01, ahead=1)
+            qs = result['q']
+            coverage = (scores[i] <= qs).astype(int)
+            all_qs.append(qs)
+            all_coverages.append(coverage)
+
+        # Save results
+        save_path = os.path.join(self.results_dir, f"{dataset_dict['dataset_name']}_decay_ogd.npz")
+        np.savez(save_path, qs=all_qs, coverages=all_coverages)
+
+        # Compute metrics
+        coverage_pct = np.mean(all_coverages) * 100
+        cov_std = np.std(np.mean(all_coverages, axis=1)) * 100
+        width = np.mean(all_qs) * 2
+        width_std = np.std(np.mean(all_qs, axis=1)) * 2
+
+        if 'traffic' in dataset_dict['dataset_name']:
+            width = width * 100
+            width_std = width_std * 100
+
+        return coverage_pct, cov_std, width, width_std
+
+    # def run_enbpi(self, dataset_dict, past_window=30):
+    #     """Run Ensemble Bootstrap Prediction Intervals (EnbPI)"""
+    #     print(f"\nRunning EnbPI on {dataset_dict['dataset_name']}...")
+
+    #     ground_truth = dataset_dict['ground_truth']
+    #     predictions = dataset_dict['predictions']
+    #     pred_len = predictions.shape[1]
+    #     warm_start = self.compute_warm_start(pred_len)
+
+    #     # Check if multivariate - EnbPI works best with univariate
+    #     is_multivariate = len(ground_truth.shape) == 3 and ground_truth.shape[-1] > 1
+    #     if is_multivariate:
+    #         print("  Warning: EnbPI designed for univariate data, using first dimension")
+    #         ground_truth = ground_truth[:, :, 0]
+    #         predictions = predictions[:, :, 0]
+
+    #     all_coverages = []
+    #     all_widths = []
+
+    #     for sample_i in tqdm(range(ground_truth.shape[0]), desc="EnbPI"):
+    #         # Create sliding window features (window size = 2)
+    #         window = 2
+    #         gt_full = ground_truth[sample_i]
+    #         pred_full = predictions[sample_i]
+
+    #         # Create features: X[t] = [pred[t], pred[t+1]], Y[t] = gt[t+2]
+    #         X_full = torch.tensor([pred_full[a:a+window] for a in range(pred_len-window)])
+    #         Y_full = torch.tensor(gt_full[-pred_len+window:], dtype=torch.float32)
+
+    #         # Split into train and predict
+    #         N = warm_start
+    #         X_train = X_full[:N]
+    #         X_predict = X_full[N:]
+    #         Y_train = Y_full[:N]
+    #         Y_predict = Y_full[N:]
+
+    #         # Build EnbPI model
+    #         fit_func = RandomForestRegressor(
+    #             n_estimators=10, max_depth=1, criterion='squared_error',
+    #             bootstrap=False, n_jobs=-1, random_state=1103
+    #         )
+
+    #         enbpi_model = SPCI.SPCI_and_EnbPI(X_train, X_predict, Y_train, Y_predict, fit_func=fit_func)
+
+    #         # Fit bootstrap models
+    #         enbpi_model.fit_bootstrap_models_online_multistep(B=25, fit_sigmaX=False, stride=1)
+
+    #         # Compute prediction intervals (use_SPCI=False for EnbPI)
+    #         enbpi_model.compute_PIs_Ensemble_online(
+    #             self.alpha, smallT=True, past_window=past_window,
+    #             use_SPCI=False, quantile_regr=False, stride=1
+    #         )
+
+    #         # Get results
+    #         results = enbpi_model.get_results(self.alpha, 'data', 1)
+    #         coverage = results['coverage'].item()
+    #         width = results['width'].item()
+
+    #         all_coverages.append(coverage)
+    #         all_widths.append(width)
+
+    #     # Save results
+    #     save_path = os.path.join(self.results_dir, f"{dataset_dict['dataset_name']}_enbpi.npz")
+    #     np.savez(save_path, all_coverages=all_coverages, all_widths=all_widths)
+
+    #     # Compute metrics
+    #     coverage_pct = np.mean(all_coverages) * 100
+    #     cov_std = np.std(all_coverages) * 100
+    #     width_mean = np.mean(all_widths)
+    #     width_std = np.std(all_widths)
+
+    #     if 'traffic' in dataset_dict['dataset_name']:
+    #         width_mean = width_mean * 100
+    #         width_std = width_std * 100
+
+    #     return coverage_pct, cov_std, width_mean, width_std
 
     def run_spci(self, dataset_dict, past_window=1):
         """Run Split Conformal Prediction Intervals (SPCI) with quantile regression"""
@@ -809,15 +899,14 @@ def load_and_generate_table(results_dir="results/new", output_csv="results_table
         # Compute metrics based on method type
         try:
             if method in ['CP']:
-            
                 # These have all_coverages and all_widths
                 all_coverages = data['all_coverages']
                 all_widths = data['all_widths']
 
                 coverage = np.mean(all_coverages) * 100
                 cov_std = np.std(np.mean(all_coverages, axis=1)) * 100
-                width = np.mean(all_widths) * 2 # diameter
-                width_std = np.std(np.mean(all_widths, axis=1)) * 2 # diameter
+                width = np.mean(all_widths) * 2  # Diameter
+                width_std = np.std(np.mean(all_widths, axis=1)) * 2
 
             elif method == 'ACI':
                 # Has band_adapts and adapt_err_seqs
@@ -839,6 +928,16 @@ def load_and_generate_table(results_dir="results/new", output_csv="results_table
                 width = np.mean(alpha_seqs) * 2
                 width_std = np.std(np.mean(alpha_seqs, axis=1)) * 2
 
+            elif method in ['ECI', 'OGD', 'DECAY_OGD']:
+                # These have qs and coverages
+                all_qs = data['qs']
+                all_coverages = data['coverages']
+
+                coverage = np.mean(all_coverages) * 100
+                cov_std = np.std(np.mean(all_coverages, axis=1)) * 100
+                width = np.mean(all_qs) * 2
+                width_std = np.std(np.mean(all_qs, axis=1)) * 2
+
             elif method in ['ENBPI', 'SPCI', 'CPTC', 'REDSDS']:
                 # These have all_coverages and all_widths (already computed as widths, not radius)
                 all_coverages = data['all_coverages']
@@ -853,7 +952,7 @@ def load_and_generate_table(results_dir="results/new", output_csv="results_table
                 print(f"Unknown method {method} in {filename}")
                 continue
 
-            # Apply traffic scaling
+            # # Apply traffic scaling
             if 'traffic' in dataset_name:
                 width = width * 100
                 width_std = width_std * 100
@@ -875,7 +974,7 @@ def load_and_generate_table(results_dir="results/new", output_csv="results_table
 def main():
     parser = argparse.ArgumentParser(description='Run conformal prediction baselines')
     parser.add_argument('--methods', nargs='+', default=['REDSDS', 'CP', 'ACI', 'CPTC'],
-                       help='Methods to run: REDSDS, CP, ACI, CPTC, AgACI, DtACI, MVP')
+                       help='Methods to run: REDSDS, CP, ACI, CPTC, AgACI, MVP, ECI, OGD, decay_OGD, EnbPI, SPCI')
     parser.add_argument('--datasets', nargs='+', default=None,
                        help='Specific datasets to run (default: all)')
     parser.add_argument('--alpha', type=float, default=0.1,
@@ -915,7 +1014,7 @@ def main():
 
         # Run selected methods
         if 'REDSDS' in args.methods:
-            cov, cov_std, width, width_std = runner.run_redsds(dataset_dict)
+            cov, cov_std, width, width_std = runner.run_REDSDS(dataset_dict)
             table.add_result(dataset_name, 'REDSDS', cov, cov_std, width, width_std)
 
         if 'CP' in args.methods:
@@ -941,6 +1040,26 @@ def main():
         if 'MVP' in args.methods:
             cov, cov_std, width, width_std = runner.run_mvp(dataset_dict)
             table.add_result(dataset_name, 'MVP', cov, cov_std, width, width_std)
+
+        if 'ECI' in args.methods:
+            cov, cov_std, width, width_std = runner.run_eci(dataset_dict)
+            table.add_result(dataset_name, 'ECI', cov, cov_std, width, width_std)
+
+        if 'OGD' in args.methods:
+            cov, cov_std, width, width_std = runner.run_ogd(dataset_dict)
+            table.add_result(dataset_name, 'OGD', cov, cov_std, width, width_std)
+
+        if 'decay_OGD' in args.methods:
+            cov, cov_std, width, width_std = runner.run_decay_ogd(dataset_dict)
+            table.add_result(dataset_name, 'decay_OGD', cov, cov_std, width, width_std)
+
+        if 'EnbPI' in args.methods:
+            cov, cov_std, width, width_std = runner.run_enbpi(dataset_dict)
+            table.add_result(dataset_name, 'EnbPI', cov, cov_std, width, width_std)
+
+        if 'SPCI' in args.methods:
+            cov, cov_std, width, width_std = runner.run_spci(dataset_dict)
+            table.add_result(dataset_name, 'SPCI', cov, cov_std, width, width_std)
 
     # Print results table
     table.print_table()

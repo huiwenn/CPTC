@@ -83,7 +83,7 @@ This creates a CSV file with coverage and width statistics for all methods acros
 - **MVP**: Multi-Valid Prediction
 - **CPTC**: Our proposed method (Conformal Prediction for Time-series with Change points)
 
-Other baselines reported in the paper such as HopCPT and ECI were ran directly using the method's open sourced codebase. SPCI is included in this repository, but requires a different environment setup to run. Please see their original repository for instructions.
+Other baselines reported in the paper such as HopCPT and ECI were ran directly using the method's open sourced codebase. **SPCI** is included in this repository, but requires a different environment setup to run. Please see their original repository for instructions, and uncomment the import SPCI line to run using the script.
 
 
 ---
@@ -102,10 +102,10 @@ The repository includes 6 datasets (3 synthetic, 3 real-world). We include the i
 
 All datasets are pre-processed and stored in `.npz` format with the following structure:
 - `ground_truth`: Actual observations
-- `mean` or `all_mean`: Point predictions from forecasting model
+- `all_mean`: Point predictions from forecasting model
 - `all_z_probs`: State probability estimates over time
 - `z_mean`: Per-state prediction means
-- `lb`/`ub` or `all_lb`/`all_ub`: Baseline prediction intervals
+- `all_lb`/`all_ub`: Baseline prediction intervals
 
 ---
 
